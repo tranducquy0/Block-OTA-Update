@@ -10,6 +10,7 @@ LEGACY_DISABLED_LIST="$STATE_DIR/disabled_packages.txt"
 REPORT_JSON="$STATE_DIR/report.json"
 REPORT_HTML="/sdcard/BlockOTA/report.html"
 SMART_SCAN_LIST="$STATE_DIR/smart_scan_targets.txt"
+SMART_CLASS_FILE="$STATE_DIR/smart_scan_classification.txt"
 TOGGLE_DIR="$STATE_DIR/toggles"
 DISABLE_FILE="$TOGGLE_DIR/disable"
 DRYRUN_FILE="$TOGGLE_DIR/dryrun"
@@ -81,7 +82,7 @@ is_user_whitelisted(){
 is_protected_pkg(){
   is_user_whitelisted "$1" && return 0
   case "$1" in
-    android|com.android.systemui|com.android.settings|com.android.packageinstaller|com.android.providers.settings|com.android.providers.downloads|com.google.android.gms)
+    android|com.android.systemui|com.android.settings|com.android.packageinstaller|com.android.providers.settings|com.android.providers.downloads|com.google.android.gms|com.google.android.configupdater)
       return 0
       ;;
   esac
@@ -419,7 +420,7 @@ vendor_targets(){
   case "$VENDOR" in
     samsung) echo "com.wssyncmldm com.sec.android.soagent com.sec.android.fotaclient com.samsung.sdm com.samsung.sdm.sdmviewer com.samsung.android.lool" ;;
     xiaomi) echo "com.android.updater com.miui.rom" ;;
-    oppo) echo "com.coloros.sau com.oplus.ota com.oplus.sau com.oplus.romupdate" ;;
+    oppo) echo "" ;;
     vivo) echo "com.bbk.updater com.vivo.upslide" ;;
     huawei) echo "com.huawei.android.hwouc com.huawei.android.hwouc.overlay" ;;
     motorola) echo "com.motorola.ccc.ota com.motorola.android.fota" ;;
@@ -430,6 +431,24 @@ vendor_targets(){
     lg) echo "com.lge.lgdmsclient com.lge.updatecenter" ;;
     *) echo "com.android.updater" ;;
   esac
+}
+
+# Diagnostic candidates are reported, never auto-disabled. Membership in
+# vendor_targets() only marks a package as configured for the explicit block
+# command; it is not evidence that the package is responsible for OS OTA.
+vendor_candidates(){
+  case "$VENDOR" in
+    oppo) echo "com.oppo.ota com.oplus.ota com.coloros.sau com.oplus.sau com.oplus.romupdate com.nearme.romupdate" ;;
+    *) vendor_targets ;;
+  esac
+}
+
+is_configured_ota_pkg(){
+  candidate="$1"
+  for target in $(vendor_targets); do
+    [ "$target" = "$candidate" ] && return 0
+  done
+  return 1
 }
 
 user_blacklist_targets(){
@@ -450,16 +469,29 @@ scan_ota_packages(){
 
 scan_smart(){
   pm list packages 2>/dev/null | cut -d: -f2 | grep -iE "ota|fota|systemupdate|fotaclient|soagent|wssync|hwouc|romupdate|updater|updatecenter|dmclient|device.*management|ccc.ota|sau" | sort > "$SMART_SCAN_LIST"
-  logi "Smart scan saved: $SMART_SCAN_LIST"
-  cat "$SMART_SCAN_LIST"
+  : > "$SMART_CLASS_FILE"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if is_protected_pkg "$p"; then
+      cls="protected"
+    elif is_configured_ota_pkg "$p"; then
+      cls="configured"
+    else
+      cls="unknown"
+    fi
+    echo "$cls|$p" >> "$SMART_CLASS_FILE"
+    logi "Smart scan classified $cls: $p"
+  done < "$SMART_SCAN_LIST"
+  logi "Smart scan saved: $SMART_SCAN_LIST; classification: $SMART_CLASS_FILE"
+  echo "Smart scan classification (report only, nothing disabled):"
+  cat "$SMART_CLASS_FILE"
 }
 
 block_smart_targets(){
-  [ -f "$SMART_SCAN_LIST" ] || { logi "Smart block skipped: run scan-smart first"; return; }
-  logi "WARNING: Applying user-requested Smart Block targets"
-  while IFS= read -r p; do
-    [ -n "$p" ] && disable_package_safely "$p"
-  done < "$SMART_SCAN_LIST"
+  [ -f "$SMART_SCAN_LIST" ] || { logi "Smart Block skipped: run scan-smart first"; return; }
+  logi "Smart Block is report-only; no packages are disabled automatically"
+  echo "Smart Block is report-only. Review this classification and disable a specific verified package manually if needed:"
+  [ -f "$SMART_CLASS_FILE" ] && cat "$SMART_CLASS_FILE" || cat "$SMART_SCAN_LIST"
 }
 
 health_check(){
@@ -509,11 +541,27 @@ health_check(){
       logi "Health resolved system-update activity outside allowlist: $activity"
     fi
   else
+    echo "Configured OTA targets (auto-disable set):"
+    logi "Health configured OTA targets for vendor=$VENDOR"
     for p in $(vendor_targets); do
       state="$(pkg_state "$p")"
-      echo "Package $p: $state"
-      logi "Health package $p: $state"
+      echo "Target $p: $state"
+      logi "Health target $p: $state"
     done
+    echo "Known installed OTA-related candidates (diagnostic only):"
+    logi "Health installed OTA-related candidates for vendor=$VENDOR"
+    for p in $(vendor_candidates); do
+      pkg_exists "$p" || continue
+      state="$(pkg_state "$p")"
+      is_protected_pkg "$p" && state="$state (protected)"
+      echo "Candidate $p: $state"
+      logi "Health candidate $p: $state"
+    done
+    p="com.google.android.configupdater"
+    if pkg_exists "$p"; then
+      echo "Protected candidate $p: $(pkg_state "$p")"
+      logi "Health protected candidate $p: $(pkg_state "$p")"
+    fi
   fi
   clear_component_dump_cache
 }
@@ -540,7 +588,7 @@ EOF
 write_html_report(){
   write_json_report
   cat > "$REPORT_HTML" <<EOF
-<!doctype html><html><head><meta charset="utf-8"><title>Block OTA Update</title><style>body{font-family:Arial;background:#111;color:#eee;padding:20px}.card{background:#1d1d1d;border-radius:12px;padding:16px;margin:12px 0}.ok{color:#6ee77a}.warn{color:#ffd166}pre{white-space:pre-wrap;background:#0b0b0b;padding:12px;border-radius:8px}</style></head><body><h1>Block OTA Update</h1><div class="card"><b>Vendor:</b> $VENDOR<br><b>Brand:</b> $BRAND<br><b>Manufacturer:</b> $MANUFACTURER<br><b>Model:</b> $MODEL<br><b>Android:</b> $RELEASE / SDK $SDK<br><b>A/B OTA:</b> $AB_OTA</div><div class="card"><b>Status:</b> $( [ -f "$DISABLE_FILE" ] && echo '<span class="warn">PAUSED</span>' || echo '<span class="ok">ACTIVE</span>' )<br><b>Dry-run:</b> $( [ -f "$DRYRUN_FILE" ] && echo yes || echo no )<br><b>Smart block:</b> $( [ -f "$SMART_BLOCK_FILE" ] && echo armed || echo off )</div><div class="card"><h2>Module-owned changes</h2><pre>$( [ -f "$APPLIED_LIST" ] && cat "$APPLIED_LIST" || echo none )</pre></div><div class="card"><h2>Smart scan targets</h2><pre>$( [ -f "$SMART_SCAN_LIST" ] && cat "$SMART_SCAN_LIST" || echo none )</pre></div><div class="card"><h2>Log tail</h2><pre>$( tail -n 80 "$LOG" 2>/dev/null )</pre></div></body></html>
+<!doctype html><html><head><meta charset="utf-8"><title>Block OTA Update</title><style>body{font-family:Arial;background:#111;color:#eee;padding:20px}.card{background:#1d1d1d;border-radius:12px;padding:16px;margin:12px 0}.ok{color:#6ee77a}.warn{color:#ffd166}pre{white-space:pre-wrap;background:#0b0b0b;padding:12px;border-radius:8px}</style></head><body><h1>Block OTA Update</h1><div class="card"><b>Vendor:</b> $VENDOR<br><b>Brand:</b> $BRAND<br><b>Manufacturer:</b> $MANUFACTURER<br><b>Model:</b> $MODEL<br><b>Android:</b> $RELEASE / SDK $SDK<br><b>A/B OTA:</b> $AB_OTA</div><div class="card"><b>Status:</b> $( [ -f "$DISABLE_FILE" ] && echo '<span class="warn">PAUSED</span>' || echo '<span class="ok">ACTIVE</span>' )<br><b>Dry-run:</b> $( [ -f "$DRYRUN_FILE" ] && echo yes || echo no )<br><b>Smart block:</b> $( [ -f "$SMART_BLOCK_FILE" ] && echo armed || echo off )</div><div class="card"><h2>Module-owned changes</h2><pre>$( [ -f "$APPLIED_LIST" ] && cat "$APPLIED_LIST" || echo none )</pre></div><div class="card"><h2>Smart scan targets</h2><pre>$( [ -f "$SMART_SCAN_LIST" ] && cat "$SMART_SCAN_LIST" || echo none )</pre></div><div class="card"><h2>Smart scan classification</h2><pre>$( [ -f "$SMART_CLASS_FILE" ] && cat "$SMART_CLASS_FILE" || echo none )</pre></div><div class="card"><h2>Log tail</h2><pre>$( tail -n 80 "$LOG" 2>/dev/null )</pre></div></body></html>
 EOF
   echo "$REPORT_HTML"
 }
@@ -566,7 +614,7 @@ status_report(){
   echo "Android: $RELEASE / SDK $SDK"
   echo "A/B OTA: $AB_OTA Slot: $SLOT"
   [ -f "$DISABLE_FILE" ] && echo "Status: PAUSED" || echo "Status: ACTIVE"
-  [ -f "$SMART_BLOCK_FILE" ] && echo "Smart block: ARMED (manual only)" || echo "Smart block: OFF"
+  [ -f "$SMART_BLOCK_FILE" ] && echo "Smart block: ARMED (report-only)" || echo "Smart block: OFF"
   [ -f "$DRYRUN_FILE" ] && echo "Dry-run: ON" || echo "Dry-run: OFF"
   echo "JSON report: $REPORT_JSON"
   echo "HTML report: $REPORT_HTML"
@@ -602,7 +650,7 @@ apply_boot_rules(){
   if [ "$VENDOR" = "google" ]; then
     block_all "$quiet"
   else
-    logi "Boot auto-block skipped for vendor=$VENDOR; use blockota block explicitly"
+    logi "Boot auto-block skipped for vendor=$VENDOR (passive by default); run blockota block explicitly for configured targets"
     write_json_report
   fi
 }
@@ -651,7 +699,7 @@ restore_all(){
   else
     rm -f "$pending" "$APPLIED_LIST"
   fi
-  [ -f "$LEGACY_DISABLED_LIST" ] && logi "Legacy v3 disable list retained untouched for safety: $LEGACY_DISABLED_LIST"
+  [ -f "$LEGACY_DISABLED_LIST" ] && logi "Legacy v3 disable list preserved unchanged (not restored automatically): $LEGACY_DISABLED_LIST; re-enable those packages manually if needed"
   write_json_report
   logi "Restore cycle complete"
 }

@@ -7,7 +7,7 @@ case "$1" in
   restore|enable) touch "$DISABLE_FILE"; restore_all; echo "Restored and paused. Run blockota resume to block again.";;
   pause|disable) touch "$DISABLE_FILE"; remove_pixel_manual_update_rule || true; echo "Paused. Use blockota restore to re-enable module-owned components.";;
   resume) rm -f "$DISABLE_FILE"; block_all; echo "Resumed.";;
-  smart-block-on) touch "$SMART_BLOCK_FILE"; scan_smart >/dev/null; block_smart_targets; echo "Smart block applied. Review the log before rebooting.";;
+  smart-block-on) touch "$SMART_BLOCK_FILE"; scan_smart >/dev/null; block_smart_targets; echo "Smart block classification saved (report-only; nothing disabled). Review the log.";;
   smart-block-off) rm -f "$SMART_BLOCK_FILE"; echo "Smart block OFF.";;
   dryrun-on) touch "$DRYRUN_FILE"; echo "Dry-run ON.";;
   dryrun-off) rm -f "$DRYRUN_FILE"; echo "Dry-run OFF.";;
@@ -19,5 +19,23 @@ case "$1" in
   report) write_html_report;;
   github-help) github_help;;
   log) tail -n 120 "$LOG" 2>/dev/null;;
-  *) echo "Usage: blockota {status|block|enforce|restore|pause|resume|smart-block-on|smart-block-off|dryrun-on|dryrun-off|scan|scan-smart|resolve|health|json|report|github-help|log}";;
+  help|-h|--help) cat <<EOF
+Block OTA Update CLI
+
+  status, health, scan, scan-smart   Inspect current state (no changes)
+  block, enforce                     Apply configured targets (vendor_targets)
+  restore, pause, resume             Restore module-owned changes / pause / resume
+  smart-block-on, smart-block-off    Arm/disarm Smart Block classification
+  report, json, log                  Write/read reports and logs
+
+Smart Block is report-only: it classifies packages as protected, configured, or
+unknown and never disables anything. Review the classification before acting.
+
+On OPPO/Realme the configured target list is empty for now, so 'blockota block'
+will not disable any OPPO/Realme package. The OTA-related packages shown by
+health/scan-smart are diagnostic candidates only until their roles are verified
+on the target firmware. Boot enforcement stays passive on OPPO/Realme.
+EOF
+;;
+  *) echo "Usage: blockota {status|block|enforce|restore|pause|resume|smart-block-on|smart-block-off|dryrun-on|dryrun-off|scan|scan-smart|resolve|health|json|report|github-help|help|log}";;
 esac

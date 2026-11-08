@@ -58,7 +58,11 @@ Android's Package Manager and Intent Firewall directory. Reboot after
 installation. To enforce immediately from a working rooted Android session,
 run `su -c blockota enforce`.
 
-Other vendors are changed only when you run the explicit block command.
+Other vendors are changed only when you run the explicit block command. On
+OPPO/Realme the configured target list is intentionally empty for now, so
+`blockota block` will not disable any OPPO/Realme package. OTA-related packages
+are reported as diagnostic candidates only until their roles are verified on the
+target firmware. Boot enforcement stays passive on OPPO/Realme.
 
 ## Commands
 
@@ -77,10 +81,14 @@ su -c blockota smart-block-on
 su -c blockota smart-block-off
 su -c blockota report
 su -c blockota log
+su -c blockota help
 ~~~
 
-Smart Block is manual only. It may target packages based on their names, so
-review its log before rebooting. It is never run automatically at boot.
+Smart Block is report-only. It classifies name-matched packages as `protected`,
+`configured`, or `unknown` and never disables anything automatically. A
+`configured` package is listed in the module's vendor target set; that is not
+proof it is responsible for OS OTA. Review the classification before acting. It
+is never run automatically at boot.
 
 ## Safety and recovery
 
