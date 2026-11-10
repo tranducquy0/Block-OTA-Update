@@ -31,10 +31,11 @@ Block OTA Update CLI
 Smart Block is report-only: it classifies packages as protected, configured, or
 unknown and never disables anything. Review the classification before acting.
 
-On OPPO/Realme the configured target list is empty for now, so 'blockota block'
-will not disable any OPPO/Realme package. The OTA-related packages shown by
-health/scan-smart are diagnostic candidates only until their roles are verified
-on the target firmware. Boot enforcement stays passive on OPPO/Realme.
+On OPPO/Realme the verified packages (com.oppo.ota, com.oplus.sau,
+com.nearme.romupdate) are hidden with 'pm hide --user 0' by 'blockota block'
+and restored with 'pm unhide' by 'blockota restore'. A manual user 'pm hide'
+stays untracked. The other OTA-related packages shown by health/scan-smart are
+diagnostic candidates only. Boot enforcement stays passive on OPPO/Realme.
 EOF
 ;;
   *) echo "Usage: blockota {status|block|enforce|restore|pause|resume|smart-block-on|smart-block-off|dryrun-on|dryrun-off|scan|scan-smart|resolve|health|json|report|github-help|help|log}";;

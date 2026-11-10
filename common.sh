@@ -91,10 +91,18 @@ is_protected_pkg(){
 
 pkg_exists(){ pm path "$1" >/dev/null 2>&1; }
 
+# Hidden apps do not appear in pm list packages -d, and pm enable fails on
+# hidden packages; detect the state from the per-user package dump instead.
+pkg_hidden(){
+  dumpsys package "$1" 2>/dev/null | grep -Eq '^[[:space:]]*User 0:.*hidden=true'
+}
+
 pkg_state(){
   p="$1"
   if ! pkg_exists "$p"; then
     echo "absent"
+  elif pkg_hidden "$p"; then
+    echo "hidden"
   elif pm list packages -d --user 0 2>/dev/null | grep -qx "package:$p"; then
     echo "disabled"
   else
@@ -324,11 +332,30 @@ disable_package_safely(){
   is_protected_pkg "$p" && { logi "Skip protected/whitelisted package: $p"; return; }
   state="$(pkg_state "$p")"
   [ "$state" = "disabled" ] && { logi "Package already disabled user=0: $p"; return; }
+  [ "$state" = "hidden" ] && { logi "Skip hidden package; user-0 disable would break pm enable restore: $p"; return; }
   if pm disable-user --user 0 "$p" >/dev/null 2>&1; then
     record_applied package "$p"
     logi "Disabled OTA package user=0: $p"
   else
     logi "WARNING: Could not disable OTA package: $p"
+  fi
+}
+
+# pm hide keeps launcher/receivers out of the framework while staying
+# reversible with pm unhide.  Only packages hidden by this module are
+# recorded; a user-hidden package is left untouched and untracked.
+hide_package_safely(){
+  p="$1"
+  [ -f "$DRYRUN_FILE" ] && { logi "[DRYRUN] Would hide package user=0: $p"; return; }
+  pkg_exists "$p" || { logi "Skip unavailable package: $p"; return; }
+  is_protected_pkg "$p" && { logi "Skip protected/whitelisted package: $p"; return; }
+  state="$(pkg_state "$p")"
+  [ "$state" = "hidden" ] && { logi "Package already hidden user=0 (not module-owned): $p"; return; }
+  if pm hide --user 0 "$p" >/dev/null 2>&1; then
+    record_applied package_hidden "$p"
+    logi "Hidden OTA package user=0: $p"
+  else
+    logi "WARNING: Could not hide OTA package: $p"
   fi
 }
 
@@ -444,10 +471,9 @@ vendor_candidates(){
 }
 
 is_configured_ota_pkg(){
-  candidate="$1"
-  for target in $(vendor_targets); do
-    [ "$target" = "$candidate" ] && return 0
-  done
+  case " $(vendor_hide_targets; vendor_targets) " in
+    *" $1 "*) return 0 ;;
+  esac
   return 1
 }
 
@@ -456,9 +482,24 @@ user_blacklist_targets(){
   grep -v '^[[:space:]]*#' "$USER_BLACKLIST" | sed '/^[[:space:]]*$/d'
 }
 
+# Packages verified safe to pm hide on the target firmware (user-verified on
+# RMX3834 Android 15); they are hidden with pm hide and restored with pm unhide.
+vendor_hide_targets(){
+  case "$VENDOR" in
+    oppo) echo "com.oppo.ota com.oplus.sau com.nearme.romupdate" ;;
+    *) echo "" ;;
+  esac
+}
+
 block_vendor_packages(){
   for p in $(vendor_targets; user_blacklist_targets); do
     disable_package_safely "$p"
+  done
+}
+
+hide_vendor_packages(){
+  for p in $(vendor_hide_targets; user_blacklist_targets); do
+    hide_package_safely "$p"
   done
 }
 
@@ -541,9 +582,16 @@ health_check(){
       logi "Health resolved system-update activity outside allowlist: $activity"
     fi
   else
-    echo "Configured OTA targets (auto-disable set):"
+    echo "Configured OTA targets (auto-disable set, user 0):"
     logi "Health configured OTA targets for vendor=$VENDOR"
     for p in $(vendor_targets); do
+      state="$(pkg_state "$p")"
+      echo "Target $p: $state"
+      logi "Health target $p: $state"
+    done
+    echo "Configured OTA hide targets (auto-hide set, user 0):"
+    logi "Health configured OTA hide targets for vendor=$VENDOR"
+    for p in $(vendor_hide_targets; vendor_targets); do
       state="$(pkg_state "$p")"
       echo "Target $p: $state"
       logi "Health target $p: $state"
@@ -552,6 +600,7 @@ health_check(){
     logi "Health installed OTA-related candidates for vendor=$VENDOR"
     for p in $(vendor_candidates); do
       pkg_exists "$p" || continue
+      is_configured_ota_pkg "$p" && continue
       state="$(pkg_state "$p")"
       is_protected_pkg "$p" && state="$state (protected)"
       echo "Candidate $p: $state"
@@ -635,6 +684,7 @@ block_all(){
     block_google_pixel "$quiet"
   else
     block_vendor_packages
+    hide_vendor_packages
   fi
   if [ "$quiet" != true ]; then
     clear_component_dump_cache
@@ -680,6 +730,15 @@ restore_all(){
         elif pm enable --user 0 "$target" >/dev/null 2>&1; then
           restored=true
           logi "Restored package user=0: $target"
+        fi
+        ;;
+      package_hidden)
+        if ! pkg_exists "$target"; then
+          restored=true
+          logi "Package no longer present; dropped restore record: $target"
+        elif pm unhide --user 0 "$target" >/dev/null 2>&1; then
+          restored=true
+          logi "Restored hidden package user=0: $target"
         fi
         ;;
       *)

@@ -59,10 +59,13 @@ installation. To enforce immediately from a working rooted Android session,
 run `su -c blockota enforce`.
 
 Other vendors are changed only when you run the explicit block command. On
-OPPO/Realme the configured target list is intentionally empty for now, so
-`blockota block` will not disable any OPPO/Realme package. OTA-related packages
-are reported as diagnostic candidates only until their roles are verified on the
-target firmware. Boot enforcement stays passive on OPPO/Realme.
+OPPO/Realme, three packages verified on the target firmware (RMX3834 Android
+15) — `com.oppo.ota`, `com.oplus.sau`, `com.nearme.romupdate` — are hidden with
+`pm hide --user 0` by `blockota block` and restored with `pm unhide` by
+`blockota restore`. `com.oplus.ota`, `com.coloros.sau`, and
+`com.oplus.romupdate` remain diagnostic candidates only. A `pm hide` you run
+manually stays out-of-band: the module records only changes it made itself.
+Boot enforcement stays passive on OPPO/Realme.
 
 ## Commands
 
